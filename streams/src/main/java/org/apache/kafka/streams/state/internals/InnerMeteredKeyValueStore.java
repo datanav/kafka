@@ -48,6 +48,7 @@ class InnerMeteredKeyValueStore<K, IK, V, IV> extends WrappedStateStore.Abstract
     private Sensor putAllTime;
     private Sensor allTime;
     private Sensor rangeTime;
+    private Sensor prefixTime;
     private Sensor flushTime;
     private StreamsMetrics metrics;
     private ProcessorContext context;
@@ -137,6 +138,12 @@ class InnerMeteredKeyValueStore<K, IK, V, IV> extends WrappedStateStore.Abstract
         this.flushTime = this.metrics.addLatencyAndThroughputSensor(metricScope,
                                                                     name,
                                                                     "flush",
+                                                                    Sensor.RecordingLevel.DEBUG,
+                                                                    tagKey,
+                                                                    tagValue);
+        this.prefixTime = this.metrics.addLatencyAndThroughputSensor(metricScope,
+                                                                    name,
+                                                                    "prefix",
                                                                     Sensor.RecordingLevel.DEBUG,
                                                                     tagKey,
                                                                     tagValue);
@@ -252,6 +259,11 @@ class InnerMeteredKeyValueStore<K, IK, V, IV> extends WrappedStateStore.Abstract
     @Override
     public KeyValueIterator<K, V> all() {
         return new MeteredKeyValueIterator(this.inner.all(), this.allTime);
+    }
+
+    @Override
+    public KeyValueIterator<K, V> prefixScan(K prefix) {
+        return new MeteredKeyValueIterator(this.inner.prefixScan(typeConverter.innerKey(prefix)), this.prefixTime);
     }
 
     @Override

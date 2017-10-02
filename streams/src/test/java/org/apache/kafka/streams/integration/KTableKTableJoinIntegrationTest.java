@@ -23,15 +23,11 @@ import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.apache.kafka.common.utils.Bytes;
-import org.apache.kafka.streams.KafkaStreams;
-import org.apache.kafka.streams.KeyValue;
-import org.apache.kafka.streams.StreamsBuilder;
-import org.apache.kafka.streams.StreamsConfig;
+import org.apache.kafka.streams.*;
 import org.apache.kafka.streams.integration.utils.EmbeddedKafkaCluster;
 import org.apache.kafka.streams.integration.utils.IntegrationTestUtils;
-import org.apache.kafka.streams.kstream.KTable;
-import org.apache.kafka.streams.kstream.Materialized;
-import org.apache.kafka.streams.kstream.ValueJoiner;
+import org.apache.kafka.streams.kstream.*;
+import org.apache.kafka.streams.processor.StateStore;
 import org.apache.kafka.streams.state.KeyValueIterator;
 import org.apache.kafka.streams.state.KeyValueStore;
 import org.apache.kafka.streams.state.QueryableStoreTypes;
@@ -293,6 +289,68 @@ public class KTableKTableJoinIntegrationTest {
     }
 
 
+    @Test
+    public void testOneToManyKTableKTable() throws Exception {
+        streamsConfig.put(StreamsConfig.APPLICATION_ID_CONFIG, "onetomanyjoin");
+
+        final StreamsBuilder builder = new StreamsBuilder();
+//        Materialized<String, String, KeyValueStore<Bytes, byte[]>> bar = Materialized.as("bar");
+        final KTable<String, String> table1 = builder.table(TABLE_1, Consumed.with(Serdes.String(), Serdes.String()));
+//        Materialized<String, String, KeyValueStore<Bytes, byte[]>> foo = Materialized.as("foo");
+        final KTable<String, String> table3 = builder.table(TABLE_3);
+
+        ValueMapper<String, String> keyExtractor = new ValueMapper<String, String>() {
+            public String apply(String value) {
+                return "a" + value;
+            }
+        };
+        ValueMapper<String, String> joinPrefixFaker = new ValueMapper<String, String>() {
+            public String apply(String value) {
+                return "a";
+            }
+        };
+        ValueJoiner<String, String, String> joiner = new ValueJoiner<String, String, String>() {
+            public String apply(final String value1, final String value2) {
+                return value1 + "-" + value2;
+            }
+        };
+
+        String queryableStoreName = "my-store";
+        table1.oneToManyJoin(table3,
+                keyExtractor,
+                joinPrefixFaker,
+                keyExtractor,
+                joiner,
+                Serdes.String(),
+                Serdes.String(),
+                Serdes.String(),
+                Serdes.String(),
+                queryableStoreName);
+
+        KafkaStreams streams = new KafkaStreams(builder.build(), new StreamsConfig(streamsConfig));
+        streams.start();
+
+        List<KeyValue<String, String>> expectedResult = Arrays.asList(
+                new KeyValue<>("a", "null-A3"),
+                new KeyValue<>("b", "null-B3"),
+                new KeyValue<>("c", "null-C3"),
+                new KeyValue<>("a", "A1-null-A3"),
+                new KeyValue<>("b", "B1-null-B3"),
+                new KeyValue<>("b", "B1-B2-B3"),
+                new KeyValue<>("c", "null-C2-C3")
+        );
+
+        final List<KeyValue<String, String>> result = IntegrationTestUtils.waitUntilMinKeyValueRecordsReceived(
+                CONSUMER_CONFIG,
+                OUTPUT,
+                expectedResult.size());
+
+        assertThat(result, equalTo(expectedResult));
+
+        verifyKTableKTableJoinQueryableState(queryableStoreName, expectedResult);
+    }
+
+
     private void verifyKTableKTableJoin(final JoinType joinType1,
                                         final JoinType joinType2,
                                         final List<KeyValue<String, String>> expectedResult,
@@ -311,14 +369,12 @@ public class KTableKTableJoinIntegrationTest {
         assertThat(result, equalTo(expectedResult));
 
         if (verifyQueryableState) {
-            verifyKTableKTableJoinQueryableState(joinType1, joinType2, expectedResult);
+            verifyKTableKTableJoinQueryableState(queryableName, expectedResult);
         }
     }
 
-    private void verifyKTableKTableJoinQueryableState(final JoinType joinType1,
-                                                      final JoinType joinType2,
+    private void verifyKTableKTableJoinQueryableState(String queryableName,
                                                       final List<KeyValue<String, String>> expectedResult) {
-        final String queryableName = joinType1 + "-" + joinType2 + "-ktable-ktable-join-query";
         final ReadOnlyKeyValueStore<String, String> myJoinStore = streams.store(queryableName,
             QueryableStoreTypes.<String, String>keyValueStore());
 
